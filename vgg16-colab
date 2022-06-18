@@ -1,0 +1,181 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+#connect with my google drive
+%cd /content/drive/My Drive/TransferLearning /
+#import pakages are needed
+!pip install tensorflow-gpu==2.0.0
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf #tf 2.0.0
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Conv2D, Dense, MaxPooling2D, Dropout,
+Flatten,GlobalAveragePooling2D
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+
+
+#Image Augmentation
+#1. Dataset Generation (Run Augmentation.py )
+#2. ImageDataGenerator (in-place or on-the-fly augmentation)
+#3. Combining dataset generation and in-place augmentation
+# Create training ImageDataGenerator object
+train_data_gen = ImageDataGenerator(rotation_range=50,
+width_shift_range=0.2,
+height_shift_range=0.2,
+zoom_range=0.3,
+horizontal_flip=True,
+vertical_flip=True,
+fill_mode='constant',cval=0,
+rescale=1./255)
+
+
+# Create validation and test ImageDataGenerator objects
+valid_data_gen = ImageDataGenerator(rotation_range=45,
+width_shift_range=0.2,
+height_shift_range=0.2,
+zoom_range=0.3,
+horizontal_flip=True,
+vertical_flip=True,
+fill_mode='constant',
+cval=0,
+rescale=1./255)
+
+test_data_gen = ImageDataGenerator(rescale=1./255)
+#definr dataset di
+dataset_dir = '/content/drive/My Drive/TransferLearning /data/'
+
+# Constants
+# Batch size
+Batch_size = 30
+
+# img shape
+img_h = 224
+img_w = 224
+
+#number classes
+num_classes=3
+classes = ['Fire', # 0
+'Neutral', # 1
+'Smoke', # 2
+]
+
+#Create generators to read images from dataset directory
+SEED = 2100
+tf.random.set_seed(SEED)
+training_dir = os.path.join(dataset_dir, 'Train')
+train_gen = train_data_gen.flow_from_directory(training_dir,
+target_size=(224, 224),
+batch_size=Batch_size,
+classes=classes,
+class_mode='categorical',
+shuffle=True,seed=SEED)
+
+#targets are directly converted into one-hot vectors
+
+# Validation
+valid_dir = os.path.join(dataset_dir, 'validation')
+valid_gen = valid_data_gen.flow_from_directory(valid_dir,
+target_size=(224, 224),
+batch_size=Batch_size,
+classes=classes,
+class_mode='categorical',
+shuffle=False,
+seed=SEED)
+
+# Test
+test_dir = os.path.join(dataset_dir, 'Test')
+test_gen = test_data_gen.flow_from_directory(test_dir,
+target_size=(224, 224),
+batch_size=9,
+shuffle=False,
+seed=SEED,
+class_mode=None)
+
+#Visualization data
+CLASS_NAMES = np.array(['Fire','Neutral', 'Smoke',], dtype='<U10')
+def show_batch(image_batch, label_batch):
+plt.figure(figsize=(25,20))
+for n in range(9):
+ax = plt.subplot(1,10,n+1)
+plt.imshow(image_batch[n])
+plt.title(CLASS_NAMES[label_batch[n]==1][0].title())
+plt.axis('off')
+image_batch, label_batch = next(train_gen)
+show_batch(image_batch, label_batch)
+
+
+#VGG16 (Pretrain Model)
+vgg16_model = tf.keras.applications.VGG16(weights='imagenet', include_top=
+False, input_shape=(img_h, img_w, 3))
+
+
+# The last 15 layers fine tune
+for layer in vgg16_model.layers[:-15]:
+layer.trainable = False
+x = vgg16_model.output
+x = GlobalAveragePooling2D()(x)
+x = Flatten()(x)
+x = Dense(units=100, activation='relu')(x)
+x = Dropout(0.3)(x)
+x = Dense(units=100, activation='relu')(x)
+x = Dropout(0.3)(x)
+output = Dense(units=3, activation='softmax')(x)
+model = Model(vgg16_model.input, output)
+model.summary()
+
+
+#define loss, metrics, optimizer
+loss = tf.keras.losses.CategoricalCrossentropy()
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+model.compile(optimizer=optimizer, loss=loss, metrics= ['accuracy'])
+
+#transferlearning
+lrr = ReduceLROnPlateau(monitor='val_loss',
+patience=3,
+verbose=1,
+factor=0.4,
+min_lr=0.00001)
+tensorbord = tf.keras.callbacks.TensorBoard(log_dir='./logs')
+callbacks = [lrr,tensorbord]
+STEP_SIZE_TRAIN=train_gen.n//train_gen.batch_size
+STEP_SIZE_VALID=valid_gen.n//valid_gen.batch_size
+transfer_learning_history = model.fit_generator(generator=train_gen,
+steps_per_epoch=STEP_SIZE_TRAIN,
+validation_data=valid_gen,
+validation_steps=STEP_SIZE_VALID,
+epochs=20,
+callbacks=callbacks)
+
+#Visualization accuracy and loss
+acc = transfer_learning_history.history['accuracy']
+val_acc = transfer_learning_history.history['val_accuracy']
+loss = transfer_learning_history.history['loss']
+val_loss = transfer_learning_history.history['val_loss']
+epochs_range = range(20)
+plt.figure(figsize=(8, 8))
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, acc, label='Training Accuracy')
+plt.plot(epochs_range, val_acc, label='Validation Accuracy')
+plt.legend(loc='lower right')
+plt.title('Training and Validation Accuracy')
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, loss, label='Training Loss')
+plt.plot(epochs_range, val_loss, label='Validation Loss')
+plt.legend(loc='upper right')
+plt.title('Training and Validation Loss')
+plt.show()
+
+
+#Visualization epoch_accuracy and epoch_loss
+%load_ext tensorboard
+%tensorboard --logdir logs
+#model evaluate with validation set
+model.evaluate(valid_gen, steps=STEP_SIZE_VALID,verbose=1)
+
+
+
+
